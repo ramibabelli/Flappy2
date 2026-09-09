@@ -244,69 +244,89 @@
         }
 
         function startRecording() {
-            if (!userAudioStream) {
-                statusDiv.innerText = "شغّل الكاميرا أولاً!";
-                return;
-            }
+    if (!userAudioStream) {
+        statusDiv.innerText = "شغّل الكاميرا أولاً!";
+        return;
+    }
 
-            recordedChunks = [];
-            isRecording = true;
+    recordedChunks = [];
+    isRecording = true;
 
-            // كانفاس مركب للتسجيل
-            compositeCanvas = document.createElement("canvas");
-            compositeCanvas.width = 320;
-            compositeCanvas.height = 480;
-            compCtx = compositeCanvas.getContext("2d");
+    compositeCanvas = document.createElement("canvas");
+    compositeCanvas.width = 320;
+    compositeCanvas.height = 480;
+    compCtx = compositeCanvas.getContext("2d");
 
-            const canvasStream = compositeCanvas.captureStream(30);
+    const canvasStream = compositeCanvas.captureStream(30);
 
-            const combinedStream = new MediaStream([
-                ...canvasStream.getVideoTracks(),
-                ...userAudioStream.getAudioTracks()
-            ]);
+    const combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...userAudioStream.getAudioTracks()
+    ]);
 
-            function renderComposite() {
-                if (!isRecording) return;
+    function renderComposite() {
+        if (!isRecording) return;
 
-                // رسم الكاميرا (مقلوبة كمرآة)
-                compCtx.save();
-                compCtx.translate(compositeCanvas.width, 0);
-                compCtx.scale(-1, 1);
-                compCtx.drawImage(video, 0, 0, compositeCanvas.width, compositeCanvas.height);
-                compCtx.restore();
+        const vw = video.videoWidth || 640;
+        const vh = video.videoHeight || 480;
+        const canvasW = 320;
+        const canvasH = 480;
 
-                // رسم اللعبة فوقها
-                compCtx.drawImage(canvas, 0, 0);
+        // حساب الـ Cover (يملأ بدون تمطيط)
+        const videoRatio = vw / vh;
+        const canvasRatio = canvasW / canvasH;
 
-                requestAnimationFrame(renderComposite);
-            }
+        let sx, sy, sWidth, sHeight;
 
-            const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') 
-                ? 'video/webm;codecs=vp9' 
-                : (MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : 'video/mp4');
-
-            try {
-                mediaRecorder = new MediaRecorder(combinedStream, { mimeType });
-            } catch (e) {
-                mediaRecorder = new MediaRecorder(combinedStream);
-            }
-
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data && e.data.size > 0) {
-                    recordedChunks.push(e.data);
-                }
-            };
-
-            mediaRecorder.onstop = exportVideo;
-
-            mediaRecorder.start(1000); // كل ثانية
-            renderComposite();
-
-            recBtn.disabled = true;
-            stopRecBtn.disabled = false;
-            statusDiv.innerText = "🎥 جاري التسجيل الآن! اعزف بالكمان.";
+        if (videoRatio > canvasRatio) {
+            // الفيديو أعرض → نقص من اليمين واليسار
+            sHeight = vh;
+            sWidth = vh * canvasRatio;
+            sx = (vw - sWidth) / 2;
+            sy = 0;
+        } else {
+            // الفيديو أطول → نقص من فوق وتحت
+            sWidth = vw;
+            sHeight = vw / canvasRatio;
+            sx = 0;
+            sy = (vh - sHeight) / 2;
         }
 
+        // رسم معكوس (مرآة) + Cover
+        compCtx.save();
+        compCtx.translate(canvasW, 0);
+        compCtx.scale(-1, 1);
+        compCtx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, canvasW, canvasH);
+        compCtx.restore();
+
+        // رسم عناصر اللعبة فوقه
+        compCtx.drawImage(canvas, 0, 0);
+
+        requestAnimationFrame(renderComposite);
+    }
+
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') 
+        ? 'video/webm;codecs=vp9' 
+        : (MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : 'video/mp4');
+
+    try {
+        mediaRecorder = new MediaRecorder(combinedStream, { mimeType });
+    } catch (e) {
+        mediaRecorder = new MediaRecorder(combinedStream);
+    }
+
+    mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = exportVideo;
+    mediaRecorder.start(1000);
+    renderComposite();
+
+    recBtn.disabled = true;
+    stopRecBtn.disabled = false;
+    statusDiv.innerText = "🎥 جاري التسجيل الآن! اعزف بالكمان.";
+        }
         function stopRecording() {
             if (mediaRecorder && mediaRecorder.state !== "inactive") {
                 isRecording = false;
