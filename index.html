@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>لعبة الطائر - خلفية الكاميرا 🎻</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            text-align: center;
+            background: #111;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 12px;
+            touch-action: manipulation;
+            user-select: none;
+            min-height: 100vh;
+        }
+        h1 { 
+            margin: 8px 0 6px 0; 
+            color: #f8e71c; 
+            font-size: 22px;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+        }
+        #status { 
+            font-size: 13px; 
+            margin-bottom: 12px; 
+            color: #fff; 
+            background: rgba(0,0,0,0.6); 
+            padding: 8px 12px; 
+            border-radius: 10px;
+            line-height: 1.4;
+        }
+
+        /* حاوي اللعبة يدمج الكاميرا مع الكانفاس */
+        .game-wrapper {
+            position: relative;
+            width: 320px;
+            height: 480px;
+            margin: 0 auto;
+            border: 4px solid #fff;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            background: #000;
+        }
+
+        /* بث الكاميرا الأمامية في الخلفية */
+        #webcam {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* مرآة لسهولة الرؤية */
+            z-index: 1;
+        }
+
+        /* الكانفاس الشفاف فوق الكاميرا */
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            background: transparent;
+        }
+
+        .btn {
+            background: linear-gradient(180deg, #2ecc71, #27ae60);
+            color: white;
+            border: none;
+            padding: 10px 22px;
+            font-size: 14px;
+            font-weight: bold;
+            border-radius: 28px;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+            margin: 5px;
+        }
+        .btn:disabled {
+            background: #444;
+            opacity: 0.7;
+        }
+
+        .mic-container {
+            margin: 8px 0;
+            background: rgba(0,0,0,0.5);
+            padding: 8px 12px;
+            border-radius: 12px;
+            display: inline-block;
+        }
+        #volumeBar {
+            width: 220px;
+            height: 14px;
+            background: #222;
+            border-radius: 8px;
+            margin: 6px auto 4px;
+            overflow: hidden;
+            border: 1px solid #666;
+        }
+        #volumeLevel {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #3498db, #2ecc71, #e74c3c);
+            transition: width 0.05s ease-out;
+            border-radius: 8px;
+        }
+        .hint {
+            font-size: 11px;
+            color: #ddd;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🎻 لعبة الطائر - خلفية الكاميرا</h1>
+    <div id="status">اضغط «تشغيل الكاميرا والميكروفون» للبدء والتصوير!</div>
+    
+    <div>
+        <button id="startBtn" class="btn" onclick="initMedia()">📷 🎤 تشغيل الكاميرا والميكروفون</button>
+    </div>
+
+    <div class="mic-container">
+        <div id="volumeBar">
+            <div id="volumeLevel"></div>
+        </div>
+        <div id="pitchReadout" class="hint">التردد الحالي: -- Hz</div>
+    </div>
+
+    <!-- منطقة اللعب المدمجة -->
+    <div class="game-wrapper">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="gameCanvas" width="320" height="480"></canvas>
+    </div><script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const video = document.getElementById("webcam");
+        const statusDiv = document.getElementById("status");
+        const volumeLevel = document.getElementById("volumeLevel");
+        const pitchReadout = document.getElementById("pitchReadout");
+        const startBtn = document.getElementById("startBtn");
+
+        let bird = { 
+            x: 70, 
+            y: 240, 
+            targetY: 240,
+            radius: 14 
+        };
+
+        let pipes = [];
+        let score = 0;
+        const TOTAL_PIPES = 10;
+        let spawnedPipesCount = 0;
+        let finishLine = null;
+        
+        let gameRunning = false;
+        let waitingForFirstNote = false;
+
+        let audioContext = null;
+        let analyser = null;
+        let timeDataArray = null;
+
+        const MIN_FREQ = 180; 
+        const MAX_FREQ = 1000;
+
+        async function initMedia() {
+            try {
+                // طلب صلاحيات الكاميرا الأمامية والميكروفون معاً
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "user" },
+                    audio: { 
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    } 
+                });
+
+                // عرض البث في عنصر الكاميرا
+                video.srcObject = stream;
+
+                // إعداد الصوت والتحليل
+                audioContext = new (window.AudioContext  window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(stream);
+                
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048; 
+                source.connect(analyser);
+
+                timeDataArray = new Float32Array(analyser.fftSize);
+
+                startBtn.innerText = "الكاميرا والميكروفون قيد التشغيل ✅";
+                startBtn.disabled = true;
+                
+                waitingForFirstNote = true;
+                statusDiv.innerText = "🎼 جاهز! اعزف أي نوتة بالكمان لتبدأ اللعبة وتستطيع تسجيل الشاشة.";
+                
+                monitorPitch();
+            } catch (err) {
+                console.error(err);
+                statusDiv.innerHTML = "❌ تعذر الوصول للكاميرا أو الميكروفون.<br>تأكد من سماح المتصفح بالصلاحيات.";
+            }
+        }
+
+        function autoCorrelate(buf, sampleRate) {
+            let SIZE = buf.length;
+            let rms = 0;
+
+            for (let i = 0; i < SIZE; i++) {
+                let val = buf[i];
+                rms += val * val;
+            }
+            rms = Math.sqrt(rms / SIZE);
+
+            if (rms < 0.02) return -1;
+
+            let r1 = 0, r2 = SIZE - 1, thres = 0.2;
+            for (let i = 0; i < SIZE / 2; i++) {
+                if (Math.abs(buf[i]) < thres) { r1 = i; break; }
+            }
+            for (let i = 1; i < SIZE / 2; i++) {
+                if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+            }
+
+            buf = buf.slice(r1, r2);
+            SIZE = buf.length;
+
+            let c = new Array(SIZE).fill(0);
+            for (let i = 0; i < SIZE; i++) {
+                for (let j = 0; j < SIZE - i; j++) {
+                    c[i] = c[i] + buf[j] * buf[j + i];
+                }
+            }
+
+            let d = 0;
+            while (c[d] > c[d + 1]) d++;
+            let maxval = -1, maxpos = -1;
+            for (let i = d; i < SIZE; i++) {
+                if (c[i] > maxval) {
+                    maxval = c[i];
+                    maxpos = i;
+                }
+            }
+
+            let T0 = maxpos;
+            if (maxval / c[0] < 0.40) return -1;
+
+            return sampleRate / T0;
+        }
+
+        function monitorPitch() {
+            if (!analyser) return;
+
+            analyser.getFloatTimeDomainData(timeDataArray);
+            let pitch = autoCorrelate(timeDataArray, audioContext.sampleRate);
+
+            if (pitch !== -1 && pitch >= MIN_FREQ && pitch <= MAX_FREQ) {
+                let ratio = (pitch - MIN_FREQ) / (MAX_FREQ - MIN_FREQ);
+                ratio = Math.max(0, Math.min(1, ratio));
+
+                volumeLevel.style.width = (ratio * 100) + "%";
+                pitchReadout.innerText = `التردد: ${Math.round(pitch)} Hz ✅`;
+
+                bird.targetY = (canvas.height - 60) - (ratio * (canvas.height - 100));
+
+                if (waitingForFirstNote) {
+                    waitingForFirstNote = false;
+                    startGame();
+                }
+            } else {
+                volumeLevel.style.width = "0%";
+                pitchReadout.innerText = pitch === -1 ? "التردد الحالي: -- Hz" : `صوت خارجي (${Math.round(pitch)} Hz)`;
+                
+                if (gameRunning) {
+                    bird.targetY = canvas.height - 45;
+                }
+            }
+
+            requestAnimationFrame(monitorPitch);
+        }
+
+        function startGame() {
+            gameRunning = true;
+            bird.y = 240;
+            bird.targetY = 240;
+            pipes = [];
+            score = 0;
+            spawnedPipesCount = 0;
+            finishLine = null;
+            statusDiv.innerText = "🎻 اللعبة شغالة مع بث الكاميرا! اعزف لتجاوز الحواجز الـ 10.";
+            loop();
+        }
+
+        function addPipe() {
+            if (spawnedPipesCount >= TOTAL_PIPES) {
+                if (!finishLine && pipes.length === 0) {
+                    finishLine = { x: canvas.width + 20, width: 25 };
+                }
+                return;
+            }
+
+            const gap = 175;
+            const topHeight = Math.floor(Math.random() * (canvas.height - gap - 120)) + 60;
+            
+            pipes.push({ 
+                x: canvas.width + 10, 
+                top: topHeight, 
+                bottom: canvas.height - topHeight - gap, 
+                width: 45, 
+                passed: false 
+            });
+
+            spawnedPipesCount++;
+        }
+
+        function update() {
+            bird.y += (bird.targetY - bird.y) * 0.1;
+
+            if (spawnedPipesCount < TOTAL_PIPES) {
+                if (pipes.length === 0  pipes[pipes.length - 1].x < canvas.width - 210) {
+                    addPipe();
+                }
+            } else if (pipes.length === 0 && !finishLine) {
+                addPipe();
+            }
+
+            for (let i = pipes.length - 1; i >= 0; i--) {
+                pipes[i].x -= 1.6;
+
+                if (
+                    bird.x + bird.radius - 3 > pipes[i].x &&
+                    bird.x - bird.radius + 3 < pipes[i].x + pipes[i].width &&
+                    (bird.y - bird.radius + 3 < pipes[i].top || 
+                     bird.y + bird.radius - 3 > canvas.height - pipes[i].bottom)
+                ) {
+                    endGame(false);
+                    return;
+                }
+
+                if (!pipes[i].passed && pipes[i].x + pipes[i].width < bird.x) {
+                    score++;
+                    pipes[i].passed = true;
+                }
+
+                if (pipes[i].x + pipes[i].width < -10) {
+                    pipes.splice(i, 1);
+                }
+            }
+
+            if (finishLine) {
+                finishLine.x -= 1.6;
+                if (finishLine.x <= bird.x) {
+                    endGame(true);
+                    return;
+                }
+            }
+        }
+
+        function endGame(isWin) {
+            gameRunning = false;
+            waitingForFirstNote = true;
+
+            if (isWin) {
+                statusDiv.innerHTML = 🏆 <b>فوز رائع! أكملت الحواجز الـ 10 بنجاح 🎉</b><br>اعزف أي نوتة للبدء من جديد.;
+            } else {
+                statusDiv.innerHTML = 💥 اصطدمت بالحاجز!<br>الحواجز المجتازة: <b>${score} من 10</b><br>🎼 <b>اعزف نوتة بالكمان للمحاولة مجدداً!</b>;
+            }
+        }
+
+        function draw() {
+            // تنظيف الكانفاس ليبقى شفافاً كلياً فوق الكاميرا
+            ctx.clearRect(0, 0, canvas.width, canvas.height);// رسم الحواجز مع حدود بيضاء لتظهر بوضوح فوق خلفية الفيديو
+            for (let p of pipes) {
+                ctx.fillStyle = "rgba(46, 204, 113, 0.85)";
+                ctx.strokeStyle = "#ffffff";
+                ctx.lineWidth = 2;
+
+                // الحاجز العلوي
+                ctx.fillRect(p.x, 0, p.width, p.top);
+                ctx.strokeRect(p.x, 0, p.width, p.top);
+
+                // الحاجز السفلي
+                ctx.fillRect(p.x, canvas.height - p.bottom, p.width, p.bottom);
+                ctx.strokeRect(p.x, canvas.height - p.bottom, p.width, p.bottom);
+            }
+
+            // رسم خط النهاية الذهبي
+            if (finishLine) {
+                ctx.fillStyle = "rgba(241, 196, 15, 0.9)";
+                ctx.fillRect(finishLine.x, 0, finishLine.width, canvas.height);
+                
+                ctx.fillStyle = "#000";
+                for (let y = 0; y < canvas.height; y += 20) {
+                    ctx.fillRect(finishLine.x, y, 12, 10);
+                    ctx.fillRect(finishLine.x + 12, y + 10, 13, 10);
+                }
+            }
+
+            // أرضية شبه شفافة مع حدود
+            ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+            ctx.fillRect(0, canvas.height - 24, canvas.width, 24);
+            ctx.fillStyle = "#2ecc71";
+            ctx.fillRect(0, canvas.height - 24, canvas.width, 4);
+
+            // رسم الطائر
+            const b = bird;
+            ctx.fillStyle = "#f8e71c";
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // العين والمقارب
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.arc(b.x + 5, b.y - 4, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#111";
+            ctx.beginPath();
+            ctx.arc(b.x + 6.5, b.y - 4, 2.2, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = "#e67e22";
+            ctx.beginPath();
+            ctx.moveTo(b.x + 12, b.y - 1);
+            ctx.lineTo(b.x + 22, b.y + 2);
+            ctx.lineTo(b.x + 12, b.y + 5);
+            ctx.closePath();
+            ctx.fill();
+
+            // النتيجة
+            ctx.fillStyle = "#fff";
+            ctx.font = "bold 18px sans-serif";
+            ctx.shadowColor = "rgba(0,0,0,0.9)";
+            ctx.shadowBlur = 6;
+            ctx.fillText(الحواجز: ${score} / ${TOTAL_PIPES}, 16, 32);
+            ctx.shadowBlur = 0;
+        }
+
+        function loop() {
+            if (!gameRunning) return;
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        draw();
+    </script>
+</body>
+</html>
