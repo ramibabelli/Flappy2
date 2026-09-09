@@ -127,7 +127,7 @@
 <body>
 
     <h1>🎻 لعبة الطائر - تسجيل عزفك بالفيديو</h1>
-    <div id="status">شغّل الكاميرا، ثم ابدأ التسجيل والعزف للحفظ مباشرة!</div>
+    <div id="status">اضغط الزر الأخضر لتشغيل الكاميرا والميكروفون</div>
     
     <div class="controls-row">
         <button id="startBtn" class="btn" onclick="initMedia()">📷 تشغيل الكاميرا والميكروفون</button>
@@ -135,7 +135,7 @@
         <button id="stopRecBtn" class="btn btn-stop" onclick="stopRecording()" disabled>💾 إيقاف وحفظ الفيديو</button>
     </div>
 
-<div class="mic-container">
+    <div class="mic-container">
         <div id="volumeBar">
             <div id="volumeLevel"></div>
         </div>
@@ -177,190 +177,238 @@
         // متغيرات التسجيل
         let mediaRecorder = null;
         let recordedChunks = [];
+        let compositeCanvas = null;
+        let compCtx = null;
+        let isRecording = false;
 
         const MIN_FREQ = 180; 
         const MAX_FREQ = 1000;
 
         async function initMedia() {
             try {
+                statusDiv.innerText = "جاري طلب الإذن للكاميرا والميكروفون...";
+
                 const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "user" },
-                    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } 
+                    video: { 
+                        facingMode: "user",
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: { 
+                        echoCancellation: false, 
+                        noiseSuppression: false, 
+                        autoGainControl: false 
+                    } 
                 });
 
                 video.srcObject = stream;
                 userAudioStream = stream;
 
-                audioContext = new (window.AudioContext  window.webkitAudioContext)();
+                // انتظار تحميل الفيديو
+                await video.play();
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // بعض المتصفحات تحتاج resume
+                if (audioContext.state === "suspended") {
+                    await audioContext.resume();
+                }
+
                 const source = audioContext.createMediaStreamSource(stream);
                 
                 analyser = audioContext.createAnalyser();
                 analyser.fftSize = 2048; 
+                analyser.smoothingTimeConstant = 0.8;
                 source.connect(analyser);
 
                 timeDataArray = new Float32Array(analyser.fftSize);
 
-                startBtn.innerText = "الكاميرا جاهرة ✅";
+                startBtn.innerText = "الكاميرا جاهزة ✅";
                 startBtn.disabled = true;
                 recBtn.disabled = false;
                 
                 waitingForFirstNote = true;
-                statusDiv.innerText = "🎼 جاهز! يمكنك الضغط على «بدء التسجيل» ثم عزف نوتة لتبدأ اللعبة والتسجيل معاً.";
+                statusDiv.innerText = "🎼 جاهز! اضغط «بدء التسجيل» ثم اعزف نوتة لتبدأ اللعبة.";
                 
                 monitorPitch();
             } catch (err) {
                 console.error(err);
-                statusDiv.innerHTML = "❌ تعذر الوصول للكاميرا أو الميكروفون.";
+                let msg = "❌ تعذر الوصول للكاميرا أو الميكروفون.";
+                if (err.name === "NotAllowedError") {
+                    msg = "❌ رفضت الإذن. اضغط على القفل جنب العنوان واسمح بالكاميرا والميكروفون ثم حدّث الصفحة.";
+                } else if (err.name === "NotFoundError") {
+                    msg = "❌ ما في كاميرا أو ميكروفون متصل.";
+                }
+                statusDiv.innerHTML = msg;
             }
         }
 
-        // إعداد ميزة تسجيل الشاشة الدمجية (المشهد المركب + الصوت)
         function startRecording() {
-            recordedChunks = [];
+            if (!userAudioStream) {
+                statusDiv.innerText = "شغّل الكاميرا أولاً!";
+                return;
+            }
 
-            // إنشائي كانفاس مخفي للدمج الحقيقي بين الفيديو واللعبة معاً
-            const compositeCanvas = document.createElement("canvas");
+            recordedChunks = [];
+            isRecording = true;
+
+            // كانفاس مركب للتسجيل
+            compositeCanvas = document.createElement("canvas");
             compositeCanvas.width = 320;
             compositeCanvas.height = 480;
-            const compCtx = compositeCanvas.getContext("2d");
+            compCtx = compositeCanvas.getContext("2d");
 
-            // التقاط بث من الكانفاس المركب بمعدل 30 إطار/ثانية
             const canvasStream = compositeCanvas.captureStream(30);
 
-            // دمج مسار الصوت القادم من الميكروفون مع مسار الفيديو المركب
             const combinedStream = new MediaStream([
                 ...canvasStream.getVideoTracks(),
                 ...userAudioStream.getAudioTracks()
             ]);
 
-            // وظيفة للرسم المستمر في الكانفاس المدمج مخصصة للتسجيل فقط
             function renderComposite() {
-                if (mediaRecorder && mediaRecorder.state === "recording") {
-                    // رسم فيديو الكاميرا المقلوبة كمرآة
-                    compCtx.save();
-                    compCtx.translate(compositeCanvas.width, 0);
-                    compCtx.scale(-1, 1);
-                    compCtx.drawImage(video, 0, 0, com
+                if (!isRecording) return;
 
-positeCanvas.width, compositeCanvas.height);
-                    compCtx.restore();
+                // رسم الكاميرا (مقلوبة كمرآة)
+                compCtx.save();
+                compCtx.translate(compositeCanvas.width, 0);
+                compCtx.scale(-1, 1);
+                compCtx.drawImage(video, 0, 0, compositeCanvas.width, compositeCanvas.height);
+                compCtx.restore();
 
-                    // رسم عناصر اللعبة الشفافة فوق الفيديو
-                    compCtx.drawImage(canvas, 0, 0);
+                // رسم اللعبة فوقها
+                compCtx.drawImage(canvas, 0, 0);
 
-                    requestAnimationFrame(renderComposite);
-                }
+                requestAnimationFrame(renderComposite);
             }
 
-            // تحديد صيغة الميديا المدعومة في الجهاز
-            const options = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-                ? { mimeType: 'video/webm;codecs=vp9' }
-                : { mimeType: 'video/mp4' };
+            const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') 
+                ? 'video/webm;codecs=vp9' 
+                : (MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : 'video/mp4');
 
             try {
-                mediaRecorder = new MediaRecorder(combinedStream, options);
+                mediaRecorder = new MediaRecorder(combinedStream, { mimeType });
             } catch (e) {
                 mediaRecorder = new MediaRecorder(combinedStream);
             }
 
             mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) recordedChunks.push(e.data);
+                if (e.data && e.data.size > 0) {
+                    recordedChunks.push(e.data);
+                }
             };
 
             mediaRecorder.onstop = exportVideo;
 
-            mediaRecorder.start();
+            mediaRecorder.start(1000); // كل ثانية
             renderComposite();
 
             recBtn.disabled = true;
             stopRecBtn.disabled = false;
-            statusDiv.innerText = "🎥 جاري التسجيل الآن! اعزف بالكمان للعب والتحريك.";
+            statusDiv.innerText = "🎥 جاري التسجيل الآن! اعزف بالكمان.";
         }
 
         function stopRecording() {
             if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                isRecording = false;
                 mediaRecorder.stop();
                 recBtn.disabled = false;
                 stopRecBtn.disabled = true;
-                statusDiv.innerText = "⏳ جاري إعداد ملف الفيديو للتحميل...";
+                statusDiv.innerText = "⏳ جاري إعداد ملف الفيديو...";
             }
         }
 
         function exportVideo() {
-            const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType  "video/webm" });
+            const blob = new Blob(recordedChunks, { 
+                type: mediaRecorder.mimeType || "video/webm" 
+            });
             const url = URL.createObjectURL(blob);
             
-            // إنشاء رابط تنزيل تلقائي
             const a = document.createElement("a");
             a.style.display = "none";
             a.href = url;
-            a.download = Violin_Game_Performance_${Date.now()}.webm;
+            a.download = `Violin_Game_${Date.now()}.webm`;
             document.body.appendChild(a);
             a.click();
             
             setTimeout(() => {
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-                statusDiv.innerText = "✅ تم حفظ الفيديو بنجاح على جهازك!";
-            }, 100);
+                statusDiv.innerText = "✅ تم حفظ الفيديو بنجاح!";
+            }, 200);
         }
 
         function autoCorrelate(buf, sampleRate) {
-            let SIZE = buf.length;
+            const SIZE = buf.length;
             let rms = 0;
-            for (let i = 0; i < SIZE; i++) { rms += buf[i] * buf[i]; }
+            for (let i = 0; i < SIZE; i++) {
+                rms += buf[i] * buf[i];
+            }
             rms = Math.sqrt(rms / SIZE);
 
-            if (rms < 0.02) return -1;
+            // عتبة أعلى لتقليل الضجيج المحيط
+            if (rms < 0.025) return -1;
 
             let r1 = 0, r2 = SIZE - 1, thres = 0.2;
-            for (let i = 0; i < SIZE / 2; i++) { if (Math.abs(buf[i]) < thres) { r1 = i; break; } }
-            for (let i = 1; i < SIZE / 2; i++) { if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; } }
+            for (let i = 0; i < SIZE / 2; i++) {
+                if (Math.abs(buf[i]) < thres) { r1 = i; break; }
+            }
+            for (let i = 1; i < SIZE / 2; i++) {
+                if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+            }
 
-            buf = buf.slice(r1, r2);
-            SIZE = buf.length;
+            const sliced = buf.slice(r1, r2);
+            const newSize = sliced.length;
 
-            let c = new Array(SIZE).fill(0);
-            for (let i = 0; i < SIZE; i++) {
-                for (let j = 0; j < SIZE - i; j++) { c[i] = c[i] + buf[j] * buf[j + i]; }
+            const c = new Array(newSize).fill(0);
+            for (let i = 0; i < newSize; i++) {
+                for (let j = 0; j < newSize - i; j++) {
+                    c[i] += sliced[j] * sliced[j + i];
+                }
             }
 
             let d = 0;
             while (c[d] > c[d + 1]) d++;
             let maxval = -1, maxpos = -1;
-            for (let i = d; i < SIZE; i++) {
-                if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
+            for (let i = d; i < newSize; i++) {
+                if (c[i] > maxval) {
+                    maxval = c[i];
+                    maxpos = i;
+                }
             }
 
-            let T0 = maxpos;
-            if (maxval / c[0] < 0.40) return -1;
+            if (maxval / c[0] < 0.45) return -1; // أكثر صرامة
 
-            return sampleRate / T0;
+            return sampleRate / maxpos;
         }
 
         function monitorPitch() {
             if (!analyser) return;
 
             analyser.getFloatTimeDomainData(timeDataArray);
-            let pitch = autoCorrelate(timeDataArray, audioContext.sampleRate);
+            const pitch = autoCorrelate(timeDataArray, audioContext.sampleRate);
 
             if (pitch !== -1 && pitch >= MIN_FREQ && pitch <= MAX_FREQ) {
-                let ratio = (pitch - MIN_FREQ) / (MAX_FREQ - MIN_FREQ);
-                ratio = Math.max(0, Math.min(1, ratio));
+                const ratio = Math.max(0, Math.min(1, (pitch - MIN_FREQ) / (MAX_FREQ - MIN_FREQ)));
 
                 volumeLevel.style.width = (ratio * 100) + "%";
-                pitchReadout.innerText = التردد: ${Math.round(pitch)} Hz ✅;
+                pitchReadout.innerText = `التردد: ${Math.round(pitch)} Hz ✅`;
 
                 bird.targetY = (canvas.height - 60) - (ratio * (canvas.height - 100));
 
-if (waitingForFirstNote) {
+                if (waitingForFirstNote) {
                     waitingForFirstNote = false;
                     startGame();
                 }
             } else {
                 volumeLevel.style.width = "0%";
-                pitchReadout.innerText = pitch === -1 ? "التردد الحالي: -- Hz" : صوت خارجي (${Math.round(pitch)} Hz);
-                if (gameRunning) { bird.targetY = canvas.height - 45; }
+                if (pitch === -1) {
+                    pitchReadout.innerText = "التردد الحالي: -- Hz";
+                } else {
+                    pitchReadout.innerText = `صوت خارج النطاق (${Math.round(pitch)} Hz)`;
+                }
+                if (gameRunning) {
+                    bird.targetY = canvas.height - 45;
+                }
             }
 
             requestAnimationFrame(monitorPitch);
@@ -400,10 +448,10 @@ if (waitingForFirstNote) {
         }
 
         function update() {
-            bird.y += (bird.targetY - bird.y) * 0.1;
+            bird.y += (bird.targetY - bird.y) * 0.12;
 
             if (spawnedPipesCount < TOTAL_PIPES) {
-                if (pipes.length === 0  pipes[pipes.length - 1].x < canvas.width - 210) {
+                if (pipes.length === 0 || pipes[pipes.length - 1].x < canvas.width - 210) {
                     addPipe();
                 }
             } else if (pipes.length === 0 && !finishLine) {
@@ -416,7 +464,7 @@ if (waitingForFirstNote) {
                 if (
                     bird.x + bird.radius - 3 > pipes[i].x &&
                     bird.x - bird.radius + 3 < pipes[i].x + pipes[i].width &&
-                    (bird.y - bird.radius + 3 < pipes[i].top  
+                    (bird.y - bird.radius + 3 < pipes[i].top || 
                      bird.y + bird.radius - 3 > canvas.height - pipes[i].bottom)
                 ) {
                     endGame(false);
@@ -428,7 +476,9 @@ if (waitingForFirstNote) {
                     pipes[i].passed = true;
                 }
 
-                if (pipes[i].x + pipes[i].width < -10) { pipes.splice(i, 1); }
+                if (pipes[i].x + pipes[i].width < -10) {
+                    pipes.splice(i, 1);
+                }
             }
 
             if (finishLine) {
@@ -445,9 +495,9 @@ if (waitingForFirstNote) {
             waitingForFirstNote = true;
 
             if (isWin) {
-                statusDiv.innerHTML = 🏆 <b>فوز ممتاز! أكملت الحواجز الـ 10 🎉</b><br>تذكر إيقاف التسجيل لحفظ المقطع!;
+                statusDiv.innerHTML = `🏆 <b>فوز ممتاز! أكملت الحواجز الـ 10 🎉</b><br>تذكر إيقاف التسجيل لحفظ المقطع!`;
             } else {
-                statusDiv.innerHTML = 💥 اصطدمت بالحاجز!<br>الحواجز المجتازة: <b>${score} من 10</b><br>🎼 <b>اعزف مجدداً للإعادة!</b>;
+                statusDiv.innerHTML = `💥 اصطدمت بالحاجز!<br>الحواجز المجتازة: <b>${score} من 10</b><br>🎼 <b>اعزف مجدداً للإعادة!</b>`;
             }
         }
 
@@ -466,7 +516,7 @@ if (waitingForFirstNote) {
                 ctx.strokeRect(p.x, canvas.height - p.bottom, p.width, p.bottom);
             }
 
-if (finishLine) {
+            if (finishLine) {
                 ctx.fillStyle = "rgba(241, 196, 15, 0.9)";
                 ctx.fillRect(finishLine.x, 0, finishLine.width, canvas.height);
                 
@@ -512,7 +562,7 @@ if (finishLine) {
             ctx.font = "bold 18px sans-serif";
             ctx.shadowColor = "rgba(0,0,0,0.9)";
             ctx.shadowBlur = 6;
-            ctx.fillText(الحواجز: ${score} / ${TOTAL_PIPES}, 16, 32);
+            ctx.fillText(`الحواجز: ${score} / ${TOTAL_PIPES}`, 16, 32);
             ctx.shadowBlur = 0;
         }
 
@@ -523,7 +573,8 @@ if (finishLine) {
             requestAnimationFrame(loop);
         }
 
+        // رسم أولي
         draw();
     </script>
 </body>
-</html>          
+</html>
